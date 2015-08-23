@@ -1,0 +1,171 @@
+Surf Zone Predictor:  
+========================================================
+author: dwake95
+date: 23 August 2015
+
+**Overview:** The Surf Zone Predictor app utilizes data from the Coastal Data Information Program (CDIP) at Scripps Institute of Oceanography (SIO), and creates a regression model which compares the parameters of waves at a deep water wave buoy with those at the SIO Pier, which is just outside of the surf zone.  The model is then used to predict output of expected variables to predict future surf zone conditions.
+
+CDIP Data Extraction
+========================================================
+
+This app is using data from stations 100 and 73.  
+![](http://www.cdip.ucsd.edu/historic/map/map_images/public/1,2,3/map_17.png)
+***
+A graph of the data from CDIP for the Torrey Pines buoy (100) with the Scripps Pier (73) data overlayed in Red:  
+![](http://www.cdip.ucsd.edu/themes/media/images/plots/compendium_plot.gd?stn=100,073&stream=p1&strm=p1&yearmo=201507&pub=public&ptype=wave)
+
+Accessing Data and Creating the Model
+========================================================
+SIO provides a mechanism called *justdar* in order to access data.  A description of this data is available at this [link] (http://cdip.ucsd.edu/data_access/justdar.cdip?h)
+
+The model used predictor variables from station 100:
++ Significant Wave Height (Hs)
++ Dominant Wave Period (Tp)
++ Dominant Wave Direction (Dp)  
+
+to predict Hs from station 73 using an generalized linear regression (glm) model 
+```{r, echo=FALSE}
+require(dplyr)
+require(lubridate)
+
+# Set ground work to ingest data from user interface in the future.  
+# currently hard coded, but eventually could use a map interface to select 
+# a deep and shallow water point.
+
+cdip.data.url = "http://cdip.ucsd.edu/data_access/justdar.cdip?"
+deep.stn = "100"
+shallow.stn = "73"
+trn.start = "20120101"
+trn.end = "20141231"
+test.start = "20150101"
+test.end = "20150731"
+
+train.dd.url = paste(paste(cdip.data.url,deep.stn, sep = ""), "dd", trn.start, trn.end, sep ="+")
+train.de.url = paste(paste(cdip.data.url,deep.stn, sep = ""), "de", trn.start, trn.end, sep ="+")
+train.y.data.url = paste(paste(cdip.data.url,shallow.stn, sep = ""), "de", trn.start, trn.end, sep = "+")
+
+
+# Because the data is not set up super well with headers, utilize these headers for the columns 
+
+new.dd = c('dtg', 'Dp', 'D22+', 'D22-18', 'D18-16', 'D16-14', 'D14-12', 'D12-10', 'D10-8', 'D8-6', 'D6-2')
+new.de = c('dtg1', 'Hs', 'Tp', 'E22+', 'E22-18', 'E18-16', 'E16-14', 'E14-12', 'E12-10', 'E10-8', 'E8-6', 'E6-2')
+```
+
+The training data for the model utilizes data from prior years, from `r trn.start` to `r trn.end`. 
+
+```{r, echo=FALSE, cache=TRUE}
+# Download the Directional (dd) dataset for the selected dates for the deep water point.
+
+training.dd.cdip <- read.csv2(train.dd.url, skip = 5, header = TRUE, sep="")
+colnames(training.dd.cdip) = new.dd
+
+# Download the Energy (de) dataset for the selected dates for the deep water point.
+
+training.de.cdip <- read.csv2(train.de.url, skip = 2, header = TRUE, sep="")
+colnames(training.de.cdip) = new.de
+
+# Combine the energy and direction data sets together
+
+training.cdip = merge(training.dd.cdip,training.de.cdip, by.x = "dtg", by.y = "dtg1")
+training.cdip = filter(training.cdip, dtg!="</pre>")
+
+training.cdip = select(training.cdip, dtg, Hs, Dp, Tp)
+
+# Modify the dtg variable into a POSIX format
+training.cdip$dtg = as.character(training.cdip$dtg)
+training.cdip$dtg <- strptime(training.cdip$dtg, format = "%Y%m%d%H")
+training.cdip$dtg <- as.POSIXct(training.cdip$dtg)
+
+rm(training.dd.cdip, training.de.cdip)
+
+#Download the nearshore data
+
+training.scripps.cdip <- read.csv2(train.y.data.url, skip = 2, header = TRUE, sep="")
+colnames(training.scripps.cdip) = new.de
+training.scripps.cdip = filter(training.scripps.cdip, dtg1!="</pre>")
+training.scripps.cdip$dtg1 <- strptime(training.scripps.cdip$dtg1, format = "%Y%m%d%H")
+training.scripps.cdip$dtg1 <- as.POSIXct(training.scripps.cdip$dtg1)
+training.y = select(training.scripps.cdip, dtg1, Hs)
+rm(training.scripps.cdip)
+
+# Combine data into  a single data frame. 
+colnames(training.y)= c("dtg", "surf_Hs")
+training.all = merge(training.cdip, training.y)
+training.all$Tp = as.integer(training.all$Tp)
+
+# Build regression model with training data
+require(caret)
+modfit = train(surf_Hs~Hs+Tp+Dp, data=training.all, method = "glm")
+```
+Model
+========================================================
+The results of the model are shown below:  
+
+```{r, echo=FALSE}
+modfit$finalModel
+```
+
+Next test data was utilized from 2015 in order to test the model.
+```{r, echo=FALSE, cache=TRUE}
+# Download Test Data set.
+test.dd.url = paste(paste(cdip.data.url,deep.stn, sep = ""), "dd", test.start, test.end, sep ="+")
+test.de.url = paste(paste(cdip.data.url,deep.stn, sep = ""), "de", test.start, test.end, sep ="+")
+test.y.data.url = paste(paste(cdip.data.url,shallow.stn, sep = ""), "de", test.start, test.end, sep = "+")
+
+# Download the Directional (dd) dataset for the test dates for the deep water point.
+
+test.dd.cdip <- read.csv2(test.dd.url, skip = 5, header = TRUE, sep="")
+colnames(test.dd.cdip) = new.dd
+
+# Download the Energy (de) dataset for the test dates for the deep water point.
+
+test.de.cdip <- read.csv2(test.de.url, skip = 2, header = TRUE, sep="")
+colnames(test.de.cdip) = new.de
+
+# Combine the energy and direction data sets together
+
+test.cdip = merge(test.dd.cdip,test.de.cdip, by.x = "dtg", by.y = "dtg1")
+test.cdip = filter(test.cdip, dtg!="</pre>")
+
+test.cdip = select(test.cdip, dtg, Hs, Dp, Tp)
+
+# Modify the dtg variable into a POSIX format
+test.cdip$dtg = as.character(test.cdip$dtg)
+test.cdip$dtg <- strptime(test.cdip$dtg, format = "%Y%m%d%H")
+test.cdip$dtg <- as.POSIXct(test.cdip$dtg)
+
+rm(test.dd.cdip, test.de.cdip)
+
+#Download the nearshore data
+
+test.scripps.cdip <- read.csv2(test.y.data.url, skip = 2, header = TRUE, sep="")
+colnames(test.scripps.cdip) = new.de
+test.scripps.cdip = filter(test.scripps.cdip, dtg1!="</pre>")
+test.scripps.cdip$dtg1 <- strptime(test.scripps.cdip$dtg1, format = "%Y%m%d%H")
+test.scripps.cdip$dtg1 <- as.POSIXct(test.scripps.cdip$dtg1)
+test.y = select(test.scripps.cdip, dtg1, Hs)
+rm(test.scripps.cdip)
+
+# Combine data into  a single data frame. 
+colnames(test.y)= c("dtg", "surf_Hs")
+test.all = merge(test.cdip, test.y)
+test.all$Tp = as.integer(test.all$Tp)
+
+pred = predict(modfit, newdata = test.all)
+
+compare = data.frame(test.all$dtg, test.all$surf_Hs, pred)
+colnames(compare) = c("dtg", "actual", "predicted")
+```
+
+Test Set Prediction
+========================================================
+
+```{r, echo=FALSE}
+plot(compare$dtg, compare$actual, type = "line", ylab = "Hs (cm)", xlab = "Date", cex = .5, main = "Comparison of predicted 
+     and actual Significant Wave Height", cra=c(300,200) )
+lines(compare$dtg, compare$predicted, col = "blue", lty = 2)
+compare = mutate(compare, delta = actual - predicted, d2 = delta^2)
+avg_err = round(sqrt(mean(compare$d2)), digits = 2)
+```
+
+The average error of the model on the test data is `r avg_err` cm.
