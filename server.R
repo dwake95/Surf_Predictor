@@ -93,11 +93,11 @@ shinyServer(function(input, output) {
         output$prediction <- renderText({
                 
                 paste("Predicted Significant Wave Height is", 
-                      h3(predict(modfit, 
+                     round(predict(modfit, 
                                  newdata = data_frame("Hs" = input$Height, 
                                                       "Tp" = input$Period, 
                                                       "Dp" = input$Direction)
-                                 )
+                                 ), digits = 2
                          ),
                       "centimeters")
         })
